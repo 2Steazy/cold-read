@@ -27,12 +27,13 @@ window.COLD_READ_CASES = [
     realArrest: "2005-02-25",
     par: { steps: 4, days: 4 },
     coldDate: "2006-12-31",
+    simulation: { wrong: 0.27, cold: 0.09, extraSteps: 22, extraDays: 150 },
 
     chapters: [
-      { id: "c1", n: 1, title: "The Otero House", start: "1974-01-15", intro: "Wichita, January 1974. A 15-year-old comes home from school and finds his family dead." },
-      { id: "c2", n: 2, title: "A Name for Himself", start: "1977-03-17", intro: "Three years of quiet. Then a mother of three is killed while her children are locked in a bathroom." },
-      { id: "c3", n: 3, title: "The Quiet Years", start: "1984-06-01", intro: "BTK hasn't written since 1979. A new task force reopens every file. Meanwhile, women are still being strangled around Wichita." },
-      { id: "c4", n: 4, title: "He Writes Again", start: "2004-03-19", intro: "Thirty years after the Otero murders, an envelope lands on a reporter's desk." }
+      { id: "c1", scene: "house", n: 1, title: "The Otero House", start: "1974-01-15", intro: "Wichita, January 1974. A 15-year-old comes home from school and finds his family dead." },
+      { id: "c2", scene: "phonebooth", n: 2, title: "A Name for Himself", start: "1977-03-17", intro: "Three years of quiet. Then a mother of three is killed while her children are locked in a bathroom." },
+      { id: "c3", scene: "files", n: 3, title: "The Quiet Years", start: "1984-06-01", intro: "BTK hasn't written since 1979. A new task force reopens every file. Meanwhile, women are still being strangled around Wichita." },
+      { id: "c4", scene: "disk", n: 4, title: "He Writes Again", start: "2004-03-19", intro: "Thirty years after the Otero murders, an envelope lands on a reporter's desk." }
     ],
 
     files: {
@@ -388,12 +389,12 @@ window.COLD_READ_CASES = [
     },
 
     suspects: {
-      pruitt: { name: "Wade Pruitt", note: "Confessed to the Otero murders with two friends." , innocent: "Wade Pruitt is a changed name. The real young man's confession was false, and he and his friends had nothing to do with the murders. BTK's own October 1974 letter said so." },
-      lund: { name: "Gary Lund", note: "Named by several callers after the voice tape was broadcast.", innocent: "Gary Lund is a composite of the many people named in tips after the 1979 voice broadcast. None of those tips led anywhere." },
-      tomw: { name: "Tom Wegerle", note: "Husband of Vicki Wegerle. Found her body.", innocent: "Tom Wegerle is a changed name. Vicki's real husband lived under suspicion for 18 years. BTK's 2004 letter, and later the DNA under her fingernails, cleared him." },
-      pike: { name: "Donald Pike", note: "Paroled in 1985 after six years inside. Dates fit the gap.", innocent: "Donald Pike is a composite. The theory that BTK had been in prison during his silence was a real lead, and it went nowhere." },
-      brenner: { name: "Carl Brenner", note: "Retired, lives alone, owns a typewriter. Named by a hotline caller.", innocent: "Carl Brenner is a composite of the thousands of hotline tips in 2004. None of them identified BTK." },
-      rader: { name: "Dennis Rader", note: "Church council president. First name matches the disk." }
+      pruitt: { look: { age: 20, hair: "shaggy", hairColor: "#5a3a22", skin: "#e2b48f", outfit: "denim", facial: "none", glasses: false, build: "slim" }, name: "Wade Pruitt", note: "Confessed to the Otero murders with two friends." , innocent: "Wade Pruitt is a changed name. The real young man's confession was false, and he and his friends had nothing to do with the murders. BTK's own October 1974 letter said so." },
+      lund: { look: { age: 31, hair: "short", hairColor: "#2b2119", skin: "#d6a37c", outfit: "work", facial: "mustache", glasses: false, build: "medium" }, name: "Gary Lund", note: "Named by several callers after the voice tape was broadcast.", innocent: "Gary Lund is a composite of the many people named in tips after the 1979 voice broadcast. None of those tips led anywhere." },
+      tomw: { look: { age: 30, hair: "feathered", hairColor: "#6b4a2e", skin: "#efc6a0", outfit: "polo", facial: "none", glasses: false, build: "medium" }, name: "Tom Wegerle", note: "Husband of Vicki Wegerle. Found her body.", innocent: "Tom Wegerle is a changed name. Vicki's real husband lived under suspicion for 18 years. BTK's 2004 letter, and later the DNA under her fingernails, cleared him." },
+      pike: { look: { age: 44, hair: "buzz", hairColor: "#3a332c", skin: "#c99572", outfit: "tee", facial: "stubble", glasses: false, build: "heavy" }, name: "Donald Pike", note: "Paroled in 1985 after six years inside. Dates fit the gap.", innocent: "Donald Pike is a composite. The theory that BTK had been in prison during his silence was a real lead, and it went nowhere." },
+      brenner: { look: { age: 63, hair: "bald", hairColor: "#b9b6b0", skin: "#e8bf9c", outfit: "cardigan", facial: "none", glasses: true, build: "heavy" }, name: "Carl Brenner", note: "Retired, lives alone, owns a typewriter. Named by a hotline caller.", innocent: "Carl Brenner is a composite of the thousands of hotline tips in 2004. None of them identified BTK." },
+      rader: { look: { age: 59, hair: "parted", hairColor: "#8d8780", skin: "#e6bd98", outfit: "tie", facial: "none", glasses: false, build: "medium" }, name: "Dennis Rader", note: "Church council president. First name matches the disk." }
     },
 
     events: [
@@ -421,33 +422,80 @@ window.COLD_READ_CASES = [
       { id: "e_disk", chapter: "c4", after: { flag: "ad", days: 19 }, headline: "TV station receives a floppy disk", files: ["disk_arrives"], flags: ["disk"] }
     ],
 
+    /* Leads the player can trigger by typing. `keys` is a list of patterns; a pattern
+       matches when every term in it appears in the command (synonyms and typos are
+       handled by the engine). Leads only work in their chapter, once their
+       `requires` flags are set. */
     actions: [
-      { id: "a_canvass", chapter: "c1", label: "Canvass the neighborhood", days: 2, requires: ["otero"], files: ["otero_neighbors"] },
-      { id: "a_car", chapter: "c1", label: "Process the family car", days: 5, requires: ["otero"], files: ["otero_car"] },
-      { id: "a_kids", chapter: "c1", label: "Interview the Otero children", days: 3, requires: ["otero"], files: ["otero_kids"] },
-      { id: "a_kevin", chapter: "c1", label: "Interview the surviving brother", days: 4, requires: ["bright"], files: ["bright_kevin"] },
-      { id: "a_pruitt", chapter: "c1", label: "Interrogate the man who confessed", days: 4, requires: ["confess"], files: ["confession_interview"] },
-      { id: "a_library", chapter: "c1", label: "Go to the library and find the book", days: 1, requires: ["libcall"], files: ["library_letter"] },
+      { id: "a_canvass", chapter: "c1", label: "Canvass the neighborhood", days: 2, requires: ["otero"], files: ["otero_neighbors"],
+        keys: [["canvass"], ["neighbor"], ["door", "knock"], ["witness"], ["street"]] },
+      { id: "a_car", chapter: "c1", label: "Process the family car", days: 5, requires: ["otero"], files: ["otero_car"],
+        keys: [["car"], ["vehicle"], ["wagon"], ["dillons"]] },
+      { id: "a_kids", chapter: "c1", label: "Interview the Otero children", days: 3, requires: ["otero"], files: ["otero_kids"],
+        keys: [["child"], ["charlie"], ["sibling"], ["son"], ["otero", "interview"], ["family", "interview"], ["survivor"]] },
+      { id: "a_kevin", chapter: "c1", label: "Interview the surviving brother", days: 4, requires: ["bright"], files: ["bright_kevin"],
+        keys: [["kevin"], ["brother"], ["bright", "interview"], ["bright", "survivor"]] },
+      { id: "a_pruitt", chapter: "c1", label: "Interrogate the man who confessed", days: 4, requires: ["confess"], files: ["confession_interview"],
+        keys: [["pruitt"], ["wade"], ["confess"], ["young", "man"], ["three", "men"]] },
+      { id: "a_library", chapter: "c1", label: "Find the book at the library", days: 1, requires: ["libcall"], files: ["library_letter"],
+        keys: [["library"], ["book"], ["engineering"], ["letter"]] },
 
-      { id: "a_viankids", chapter: "c2", label: "Interview the Vian children", days: 3, requires: ["vian"], files: ["vian_kids"] },
-      { id: "a_payphone", chapter: "c2", label: "Trace the pay phone", days: 2, requires: ["fox"], files: ["payphone"] },
-      { id: "a_tape", chapter: "c2", label: "Broadcast the killer's voice", days: 30, requires: ["kake"], files: ["tape_release", "tape_tips"], suspects: ["lund"], flags: ["tape"] },
-      { id: "a_lund", chapter: "c2", label: "Bring in the man callers named", days: 5, requires: ["tape"], files: ["lund_check"] },
+      { id: "a_viankids", chapter: "c2", label: "Interview the Vian children", days: 3, requires: ["vian"], files: ["vian_kids"],
+        keys: [["child"], ["son"], ["vian", "interview"], ["bathroom"]] },
+      { id: "a_payphone", chapter: "c2", label: "Trace the pay phone", days: 2, requires: ["fox"], files: ["payphone"],
+        keys: [["pay phone"], ["payphone"], ["phone booth"], ["trace", "call"], ["trace", "phone"], ["where", "call"]] },
+      { id: "a_tape", chapter: "c2", label: "Broadcast the killer's voice", days: 30, requires: ["kake"], files: ["tape_release", "tape_tips"], suspects: ["lund"], flags: ["tape"],
+        keys: [["broadcast"], ["tape", "public"], ["recording", "public"], ["release", "tape"], ["release", "recording"], ["release", "voice"], ["play", "tape"], ["play", "recording"], ["voice", "public"], ["voice", "radio"], ["voice", "tv"], ["air", "recording"]] },
+      { id: "a_lund", chapter: "c2", label: "Bring in the man callers named", days: 5, requires: ["tape"], files: ["lund_check"],
+        keys: [["lund"], ["gary"], ["caller", "named"], ["tip"], ["coworker"], ["named"]] },
 
-      { id: "a_husband", chapter: "c3", label: "Re-interview Vicki Wegerle's husband", days: 4, requires: ["wegerle"], files: ["husband"] },
-      { id: "a_parole", chapter: "c3", label: "Check men released from prison", days: 60, requires: [], files: ["parolees", "pike"], suspects: ["pike"] },
-      { id: "a_pattern", chapter: "c3", label: "Compare recent stranglings to BTK", days: 20, requires: ["davis"], files: ["pattern"] },
+      { id: "a_husband", chapter: "c3", label: "Re-interview Vicki Wegerle's husband", days: 4, requires: ["wegerle"], files: ["husband"],
+        keys: [["husband"], ["tom"], ["wegerle", "interview"], ["spouse"]] },
+      { id: "a_parole", chapter: "c3", label: "Check men released from prison", days: 60, requires: [], files: ["parolees", "pike"], suspects: ["pike"],
+        keys: [["parole"], ["prison"], ["inmate"], ["convict"], ["jail"], ["incarcerated"], ["released"]] },
+      { id: "a_pattern", chapter: "c3", label: "Compare recent stranglings to BTK", days: 20, requires: ["davis"], files: ["pattern"],
+        keys: [["compare"], ["link"], ["pattern"], ["connect"], ["same", "killer"], ["similar"]] },
 
-      { id: "a_envelope", chapter: "c4", label: "Test the Killman envelope for prints and DNA", days: 11, requires: ["killman"], files: ["envelope_lab"] },
-      { id: "a_tipline", chapter: "c4", label: "Work the hotline tips", days: 30, requires: ["killman"], files: ["tipline", "brenner"], suspects: ["brenner"] },
-      { id: "a_homedepot", chapter: "c4", label: "Search the Home Depot for the box", days: 1, requires: ["postcard"], files: ["homedepot"], flags: ["note"] },
-      { id: "a_cctv", chapter: "c4", label: "Pull the Home Depot security video", days: 3, requires: ["note"], files: ["cctv"], flags: ["cctv"] },
-      { id: "a_ad", chapter: "c4", label: "Place the ad in the Eagle", days: 1, requires: ["note"], files: ["ad"], flags: ["ad"] },
-      { id: "a_forensics", chapter: "c4", label: "Send the disk to digital forensics", days: 1, requires: ["disk"], files: ["disk_forensics"], flags: ["meta"] },
-      { id: "a_church", chapter: "c4", label: "Look up Christ Lutheran Church", days: 1, requires: ["meta"], files: ["church"], suspects: ["rader"], flags: ["rader"] },
-      { id: "a_bg", chapter: "c4", label: "Run a background check on Rader", days: 1, requires: ["rader"], files: ["rader_bg"] },
-      { id: "a_jeep", chapter: "c4", label: "Check what Rader drives", days: 1, requires: ["rader", "cctv"], files: ["rader_jeep"] },
-      { id: "a_dna", chapter: "c4", label: "Get a warrant for a family DNA sample", days: 5, requires: ["rader"], files: ["dna"], flags: ["dna"] }
+      { id: "a_envelope", chapter: "c4", label: "Test the Killman envelope", days: 11, requires: ["killman"], files: ["envelope_lab"],
+        keys: [["envelope"], ["killman"], ["fingerprint", "letter"], ["test", "letter"], ["dna", "letter"], ["print", "letter"]] },
+      { id: "a_tipline", chapter: "c4", label: "Work the hotline tips", days: 30, requires: ["killman"], files: ["tipline", "brenner"], suspects: ["brenner"],
+        keys: [["tip"], ["hotline"], ["tipline"]] },
+      { id: "a_homedepot", chapter: "c4", label: "Search the Home Depot for the box", days: 1, requires: ["postcard"], files: ["homedepot"], flags: ["note"],
+        keys: [["home depot"], ["depot"], ["cereal"], ["box"], ["pickup"], ["truck"]] },
+      { id: "a_cctv", chapter: "c4", label: "Pull the Home Depot security video", days: 3, requires: ["note"], files: ["cctv"], flags: ["cctv"],
+        keys: [["video"], ["camera"], ["cctv"], ["footage"], ["security", "tape"]] },
+      { id: "a_ad", chapter: "c4", label: "Place the ad in the Eagle", days: 1, requires: ["note"], files: ["ad"], flags: ["ad"],
+        keys: [["ad"], ["advert"], ["classified"], ["rex"], ["newspaper"], ["eagle"], ["reply"], ["answer"]] },
+      { id: "a_forensics", chapter: "c4", label: "Send the disk to digital forensics", days: 1, requires: ["disk"], files: ["disk_forensics"], flags: ["meta"],
+        keys: [["disk"], ["floppy"], ["metadata"], ["deleted"], ["digital"]] },
+      { id: "a_church", chapter: "c4", label: "Look up Christ Lutheran Church", days: 1, requires: ["meta"], files: ["church"], suspects: ["rader"], flags: ["rader"],
+        keys: [["church"], ["lutheran"], ["congregation"], ["christ"]] },
+      { id: "a_bg", chapter: "c4", label: "Run a background check on Rader", days: 1, requires: ["rader"], files: ["rader_bg"],
+        keys: [["rader"], ["background"], ["council", "president"]] },
+      { id: "a_jeep", chapter: "c4", label: "Check what Rader drives", days: 1, requires: ["rader", "cctv"], files: ["rader_jeep"],
+        keys: [["jeep"], ["rader", "car"], ["rader", "vehicle"], ["rader", "drive"], ["registration"], ["dmv"]] },
+      { id: "a_dna", chapter: "c4", label: "Get a warrant for a family DNA sample", days: 5, requires: ["rader"], files: ["dna"], flags: ["dna"],
+        keys: [["dna"], ["daughter"], ["pap"], ["familial"], ["swab"], ["sample"], ["warrant"]] }
+    ],
+
+    /* Case-specific dead ends: reasonable moves that went nowhere. */
+    deadEnds: [
+      { chapter: "c1", keys: [["sketch"], ["composite"]], days: 5, text: "The composite sketch runs in the paper. Calls come in. None of them lead anywhere." },
+      { chapter: "c1", keys: [["coleman"]], days: 6, text: "You pull employee lists from Coleman, one of Wichita's biggest employers. Hundreds of names. Nothing ties one of them to the house." },
+      { chapter: "c1", keys: [["watch"], ["otero", "enemy"], ["air force"]], days: 4, text: "You dig into the family's past for enemies or debts. You find none." },
+      { chapter: "c1", keys: [["phone", "line"], ["cut"]], days: 2, text: "The line was cut cleanly outside the house. Whoever did it planned ahead. That's all it tells you." },
+      { chapter: "c2", keys: [["poem"], ["card"]], days: 4, text: "Handwriting and typewriter experts study the poem. It doesn't point to anyone." },
+      { chapter: "c2", keys: [["williams"], ["anna"]], days: 3, text: "Anna Williams never saw him. The items he mailed back carry nothing useful." },
+      { chapter: "c3", keys: [["ghostbuster"], ["task force"]], days: 10, text: "The task force reorganizes the files and logs every piece of preserved evidence. Useful someday. Not today." },
+      { chapter: "c3", keys: [["dna"]], days: 14, text: "The lab can test what was preserved from the old scenes, but without a suspect to compare, it can't name anyone." },
+      { chapter: "c3", keys: [["hedge"], ["park city"]], days: 5, text: "Neighbors in Park City saw nothing that night. The case stays open, unlinked." },
+      { chapter: "c4", keys: [["dennis"]], days: 2, text: "Wichita has hundreds of men named Dennis. You need something to narrow it down." },
+      { chapter: "c4", keys: [["park city", "library"]], days: 2, text: "Library staff can't say who used which public computer, or when." },
+      { chapter: "c4", keys: [["dna"]], days: 7, text: "The crime-scene DNA profile is on file. You have nobody to compare it to." },
+      { chapter: "c4", keys: [["postmark"], ["mail"], ["post office"]], days: 4, text: "Mailed from Wichita. That narrows it down to a few hundred thousand people." },
+      { chapter: "c4", keys: [["puzzle"], ["grid"], ["word search"]], days: 6, text: "Code breakers study the word grid. They can't find a message in it." },
+      { chapter: "c4", keys: [["doll"], ["murdock"], ["park"]], days: 4, text: "The bag and doll are processed. Nothing on them leads to a name." },
+      { chapter: "c4", keys: [["kake"], ["ksas"], ["station"]], days: 2, text: "Station staff hand over everything they received. No one saw who dropped it off." }
     ],
 
     culpritOutcome: [
