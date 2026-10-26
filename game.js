@@ -2,231 +2,558 @@
   "use strict";
 
   var LAUNCH_DATE = "2026-10-26"; // Case #1
-  var STAGE_POINTS = [100, 60, 30]; // points for solving on try 1, 2, 3
-  var MAX_TRIES = STAGE_POINTS.length;
   var RANKS = [
-    { min: 680, title: "Chief of Detectives", note: "Every clue, first try. The squad room wants to know how." },
-    { min: 560, title: "Homicide Lieutenant", note: "You'd have closed this case years early." },
-    { min: 420, title: "Detective Sergeant", note: "Sharp instincts. A couple of leads needed a second look." },
-    { min: 280, title: "Detective", note: "You worked the file and got your suspect." },
-    { min: 140, title: "Patrol Officer", note: "You followed the trail, with help from the hints." },
-    { min: 0, title: "Records Clerk", note: "The file is filed. Tomorrow's case is a fresh start." }
+    { min: 900, title: "Chief of Detectives" },
+    { min: 750, title: "Homicide Lieutenant" },
+    { min: 600, title: "Detective Sergeant" },
+    { min: 400, title: "Detective" },
+    { min: 200, title: "Patrol Officer" },
+    { min: 0, title: "Records Clerk" }
   ];
+  var reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   var cases = window.COLD_READ_CASES || [];
   var app = document.getElementById("app");
+  var overlay = document.getElementById("overlay");
 
-  // ---------- dates ----------
-  function localKey(d) {
-    var m = String(d.getMonth() + 1).padStart(2, "0");
-    var day = String(d.getDate()).padStart(2, "0");
-    return d.getFullYear() + "-" + m + "-" + day;
+  /* ================= dates ================= */
+  var MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  function parse(s) { var p = s.split("-").map(Number); return Date.UTC(p[0], p[1] - 1, p[2]); }
+  function iso(t) { var d = new Date(t); return d.getUTCFullYear() + "-" + pad(d.getUTCMonth() + 1) + "-" + pad(d.getUTCDate()); }
+  function pad(n) { return String(n).padStart(2, "0"); }
+  function addDays(s, n) { return iso(parse(s) + n * 86400000); }
+  function diffDays(a, b) { return Math.round((parse(b) - parse(a)) / 86400000); }
+  function fmt(s) { var d = new Date(parse(s)); return MONTHS[d.getUTCMonth()] + " " + d.getUTCDate() + ", " + d.getUTCFullYear(); }
+  function span(a, b) {
+    var da = new Date(parse(a)), db = new Date(parse(b));
+    var m = (db.getUTCFullYear() - da.getUTCFullYear()) * 12 + db.getUTCMonth() - da.getUTCMonth();
+    if (db.getUTCDate() < da.getUTCDate()) m--;
+    var y = Math.floor(m / 12), mo = m % 12, out = [];
+    if (y) out.push(y + (y === 1 ? " yr" : " yrs"));
+    if (mo) out.push(mo + (mo === 1 ? " mo" : " mos"));
+    return out.length ? out.join(" ") : diffDays(a, b) + " days";
   }
-  function dayNumber(d) {
-    var p = LAUNCH_DATE.split("-").map(Number);
-    var start = new Date(p[0], p[1] - 1, p[2]);
-    var today = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-    return Math.max(1, Math.round((today - start) / 86400000) + 1);
-  }
+  function localKey(d) { return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()); }
+
   var now = new Date();
   var todayKey = localKey(now);
-  var caseNo = dayNumber(now);
-  var theCase = cases[(caseNo - 1) % cases.length];
+  var caseNo = Math.max(1, diffDays(LAUNCH_DATE, todayKey) + 1);
+  var C = cases[(caseNo - 1) % cases.length];
 
-  // ---------- storage ----------
-  var storeKey = "coldread:" + todayKey;
-  function load(key) {
-    try { var raw = localStorage.getItem(key); return raw ? JSON.parse(raw) : null; } catch (e) { return null; }
+  /* ================= storage ================= */
+  function load(k) { try { var r = localStorage.getItem(k); return r ? JSON.parse(r) : null; } catch (e) { return null; } }
+  function save(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
+  var storeKey = "coldread2:" + todayKey;
+  function fresh() {
+    return { caseId: C.id, screen: "intro", tab: "evidence", ch: 0, clock: C.chapters[0].start,
+      fired: [], sched: {}, flags: [], files: [], seen: [], suspects: [], done: [], steps: 0, days: 0,
+      accused: null, accuseDate: null, hasDna: false };
   }
-  function save(key, val) {
-    try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) {}
-  }
-  var state = load(storeKey) || { caseId: theCase.id, screen: "intro", stage: 0, guesses: [], results: [] };
-  if (state.caseId !== theCase.id) state = { caseId: theCase.id, screen: "intro", stage: 0, guesses: [], results: [] };
-  var stats = load("coldread:stats") || { played: 0, streak: 0, best: 0, lastDay: null };
-  function persist() { save(storeKey, state); }
+  var S = load(storeKey);
+  if (!S || S.caseId !== C.id) S = fresh();
+  var stats = load("coldread:stats2") || { played: 0, solved: 0, streak: 0, best: 0, lastDay: null };
+  function persist() { save(storeKey, S); }
 
-  // ---------- matching ----------
-  function norm(s) {
-    return String(s).toLowerCase().replace(/['’`]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
-  }
-  function lev(a, b) {
-    if (a === b) return 0;
-    var prev = [], cur = [], i, j;
-    for (j = 0; j <= b.length; j++) prev[j] = j;
-    for (i = 1; i <= a.length; i++) {
-      cur = [i];
-      for (j = 1; j <= b.length; j++) {
-        cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
-      }
-      prev = cur;
-    }
-    return prev[b.length];
-  }
-  function isMatch(guess, answers) {
-    var g = norm(guess);
-    if (!g) return false;
-    var gNoArticle = g.replace(/^(the|a|an) /, "");
-    for (var i = 0; i < answers.length; i++) {
-      var a = norm(answers[i]);
-      if (g === a || gNoArticle === a) return true;
-      var allowed = a.length >= 12 ? 2 : a.length >= 5 ? 1 : 0;
-      if (allowed && lev(gNoArticle, a) <= allowed) return true;
-    }
-    return false;
-  }
-
-  // ---------- helpers ----------
+  /* ================= helpers ================= */
   function esc(s) {
-    return String(s).replace(/[&<>"']/g, function (c) {
-      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    return String(s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; });
+  }
+  function has(arr, x) { return arr.indexOf(x) !== -1; }
+  function add(arr, xs) { (xs || []).forEach(function (x) { if (!has(arr, x)) arr.push(x); }); }
+  function hash(s) { var h = 0; for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return Math.abs(h); }
+  function chapter() { return C.chapters[S.ch]; }
+  function chIndex(id) { for (var i = 0; i < C.chapters.length; i++) if (C.chapters[i].id === id) return i; return 0; }
+
+  /* ================= engine ================= */
+  function eventDate(ev) {
+    if (ev.date) return ev.date;
+    return S.sched[ev.id] || null;
+  }
+  function setFlags(fl) {
+    (fl || []).forEach(function (f) {
+      if (has(S.flags, f)) return;
+      S.flags.push(f);
+      C.events.forEach(function (ev) {
+        if (ev.after && ev.after.flag === f && !S.sched[ev.id]) S.sched[ev.id] = addDays(S.clock, ev.after.days);
+      });
     });
   }
-  function total() { return state.results.reduce(function (s, r) { return s + r.points; }, 0); }
-  function maxScore() { return theCase.stages.length * STAGE_POINTS[0]; }
-  function rankFor(score) {
-    var scaled = Math.round(score * 700 / maxScore());
-    for (var i = 0; i < RANKS.length; i++) if (scaled >= RANKS[i].min) return RANKS[i];
+  function fireDue() {
+    var fired = [];
+    var due = C.events.filter(function (ev) {
+      var d = eventDate(ev);
+      return d && !has(S.fired, ev.id) && chIndex(ev.chapter) <= S.ch && parse(d) <= parse(S.clock);
+    }).sort(function (a, b) { return parse(eventDate(a)) - parse(eventDate(b)); });
+    due.forEach(function (ev) {
+      S.fired.push(ev.id);
+      add(S.files, ev.files); add(S.suspects, ev.suspects); setFlags(ev.flags);
+      fired.push(ev);
+    });
+    return fired;
+  }
+  function nextPending() {
+    var list = C.events.filter(function (ev) {
+      var d = eventDate(ev);
+      return d && !has(S.fired, ev.id) && chIndex(ev.chapter) === S.ch;
+    }).sort(function (a, b) { return parse(eventDate(a)) - parse(eventDate(b)); });
+    return list[0] || null;
+  }
+  function availableActions() {
+    return C.actions.filter(function (a) {
+      return chIndex(a.chapter) === S.ch && !has(S.done, a.id) &&
+        a.requires.every(function (f) { return has(S.flags, f); });
+    });
+  }
+  function doAction(id) {
+    var a = C.actions.filter(function (x) { return x.id === id; })[0];
+    if (!a) return;
+    var before = S.clock;
+    S.done.push(a.id); S.steps += 1; S.days += a.days;
+    S.clock = addDays(S.clock, a.days);
+    add(S.files, a.files); add(S.suspects, a.suspects); setFlags(a.flags);
+    if (has(S.flags, "dna")) S.hasDna = true;
+    var fired = fireDue();
+    persist();
+    afterChange(before, fired, a.files || [], a.suspects || []);
+  }
+  function passTime() {
+    var before = S.clock;
+    var ev = nextPending();
+    var fired;
+    if (ev) {
+      S.clock = eventDate(ev);
+      fired = fireDue();
+    } else if (S.ch < C.chapters.length - 1) {
+      S.ch += 1;
+      var st = chapter().start;
+      if (parse(st) > parse(S.clock)) S.clock = st;
+      fired = fireDue();
+      persist();
+      showChapterCard(before, fired);
+      return;
+    } else return;
+    persist();
+    afterChange(before, fired, [], []);
+  }
+
+  /* ================= scoring ================= */
+  function score() {
+    if (S.accused !== C.culprit) return 0;
+    var s = 1000 - 8 * Math.max(0, S.steps - C.par.steps) - Math.max(0, S.days - C.par.days);
+    return Math.max(100, Math.min(1000, s));
+  }
+  function rank(sc) {
+    if (S.accused !== C.culprit) return RANKS[RANKS.length - 1];
+    for (var i = 0; i < RANKS.length; i++) if (sc >= RANKS[i].min) return RANKS[i];
     return RANKS[RANKS.length - 1];
   }
-  function tagClass(r) {
-    if (!r) return "";
-    if (r.points === STAGE_POINTS[0]) return "is-clean";
-    if (r.points > 0) return "is-partial";
-    return "is-missed";
-  }
 
-  function header() {
-    return (
-      '<header class="mast">' +
-        '<div class="mast-row">' +
-          '<span class="brand">Cold Read</span>' +
-          '<span class="caseno">Case No. ' + String(caseNo).padStart(3, "0") + "</span>" +
+  /* ================= rendering: shared ================= */
+  function clockHTML(date) {
+    var d = new Date(parse(date));
+    var parts = [MONTHS[d.getUTCMonth()].toUpperCase(), pad(d.getUTCDate()), String(d.getUTCFullYear())];
+    return '<div class="clock" role="timer" aria-label="Case clock: ' + fmt(date) + '">' +
+      parts.map(function (p, i) { return '<span class="flap f' + i + '" data-v="' + p + '">' + p + "</span>"; }).join("") +
+      "</div>";
+  }
+  function hud() {
+    var pend = nextPending();
+    var last = S.ch >= C.chapters.length - 1;
+    var waitLabel = pend ? "Let time pass" : (!last ? "Jump to " + new Date(parse(C.chapters[S.ch + 1].start)).getUTCFullYear() : "Nothing new coming");
+    return '<header class="hud">' +
+      '<div class="hud-top"><span class="brand">Cold Read</span><span class="caseno">Case ' + pad3(caseNo) + " · " + esc(C.place) + "</span></div>" +
+      '<div class="hud-main">' + clockHTML(S.clock) +
+        '<div class="meters">' +
+          '<div class="meter"><b id="m-steps">' + S.steps + "</b><span>steps</span></div>" +
+          '<div class="meter"><b id="m-days">' + S.days + "</b><span>days worked</span></div>" +
         "</div>" +
-        '<div class="mast-sub">' + esc(theCase.place) + " · " + esc(theCase.span) + "</div>" +
-      "</header>"
-    );
+        '<button class="btn time" id="pass" type="button"' + (!pend && last ? " disabled" : "") + '><span class="hourglass" aria-hidden="true"></span>' + esc(waitLabel) + "</button>" +
+      "</div>" +
+    "</header>";
+  }
+  function pad3(n) { return String(n).padStart(3, "0"); }
+
+  function fileCard(id, isNew) {
+    var f = C.files[id];
+    var r = (hash(id) % 7) - 3;
+    return '<button class="card t-' + f.type + (isNew ? " is-new" : "") + (has(S.seen, id) ? "" : " unread") + '" data-file="' + id + '" style="--r:' + r * 0.6 + 'deg" type="button">' +
+      '<span class="pin" aria-hidden="true"></span>' +
+      '<span class="card-type">' + typeLabel(f.type) + "</span>" +
+      '<span class="card-title">' + esc(f.title) + "</span>" +
+      '<span class="card-date">' + fmt(f.date) + "</span>" +
+      (has(S.seen, id) ? "" : '<span class="new-tag">New</span>') +
+    "</button>";
+  }
+  function typeLabel(t) {
+    return { report: "Police report", statement: "Interview", lab: "Lab result", clipping: "News clipping", letter: "Letter", phone: "Phone record",
+      memo: "Internal memo", note: "Recovered note", video: "Video still", disk: "Digital forensics", web: "Web page" }[t] || t;
   }
 
-  function tags() {
-    var html = '<ol class="tags" aria-label="Evidence progress">';
-    theCase.stages.forEach(function (_, i) {
-      var r = state.results[i];
-      var cls = tagClass(r);
-      if (!r && i === state.stage && state.screen === "stage") cls = "is-current";
-      var label = r ? (r.points + " points") : (i === state.stage ? "current" : "not yet opened");
-      html += '<li class="tag ' + cls + '" aria-label="Exhibit ' + (i + 1) + ": " + label + '"><span>' + (i + 1) + "</span></li>";
-    });
-    return html + "</ol>";
+  function mug(id) {
+    var h = hash(id);
+    var hair = ["M38 40 Q60 18 82 40 L82 46 Q60 34 38 46Z", "M40 44 Q60 20 80 44 L80 40 Q60 28 40 40Z", "M36 46 Q60 14 84 46 Q72 32 60 33 Q48 32 36 46Z"][h % 3];
+    return '<svg class="mug" viewBox="0 0 120 120" aria-hidden="true">' +
+      '<rect width="120" height="120" class="mug-bg"/>' +
+      [20, 40, 60, 80, 100].map(function (y) { return '<line x1="0" x2="120" y1="' + y + '" y2="' + y + '" class="mug-line"/>'; }).join("") +
+      '<ellipse cx="60" cy="52" rx="20" ry="24" class="mug-head"/>' +
+      '<path d="' + hair + '" class="mug-hair"/>' +
+      '<path d="M22 120 Q26 84 60 82 Q94 84 98 120Z" class="mug-body"/>' +
+      '<rect x="34" y="96" width="52" height="16" class="mug-plate"/>' +
+      '<text x="60" y="108" class="mug-num">' + (1000 + h % 9000) + "</text>" +
+    "</svg>";
   }
 
-  // ---------- screens ----------
+  /* ================= screens ================= */
   function renderIntro() {
     app.innerHTML =
-      header() +
-      '<section class="sheet intro">' +
-        '<p class="eyebrow">Today\'s file</p>' +
-        "<h1>" + esc(theCase.title) + "</h1>" +
-        '<p class="open-for">Open for <strong>' + theCase.yearsOpen + " years</strong></p>" +
-        '<p class="lede">' + esc(theCase.summary) + "</p>" +
-        '<ul class="rules">' +
-          "<li><b>" + theCase.stages.length + " exhibits.</b> Each one is a real piece of the investigation, in the order detectives found it.</li>" +
-          "<li><b>Type your answer.</b> Small typos are fine.</li>" +
-          "<li><b>" + STAGE_POINTS.join(" / ") + " points</b> for solving on your first, second or third try. A hint unlocks after each miss.</li>" +
-          "<li><b>Your score sets your rank,</b> from Records Clerk to Chief of Detectives.</li>" +
-        "</ul>" +
-        '<p class="cw">This is a real case with real victims. Details are factual and kept non-graphic.</p>' +
-        '<button class="btn primary" id="start" type="button">Open the file</button>' +
-      "</section>" +
-      statsBar();
-    document.getElementById("start").onclick = function () {
-      state.screen = "stage"; persist(); render();
+      '<section class="intro">' +
+        '<div class="folder" id="folder">' +
+          '<div class="folder-inside">' +
+            '<p class="eyebrow">Case ' + pad3(caseNo) + " · Open " + C.yearsOpen + " years</p>" +
+            '<h1 class="case-title">' + esc(C.title) + "</h1>" +
+            '<p class="tagline">' + esc(C.tagline) + "</p>" +
+            '<p class="summary">' + esc(C.summary) + "</p>" +
+            '<ol class="howto">' +
+              "<li><b>Read the files.</b> Reading is free. Every detail is from the real investigation.</li>" +
+              "<li><b>Follow leads.</b> Each lead costs a step and days on the case clock. Some go nowhere.</li>" +
+              "<li><b>Let time pass</b> when you're stuck. History keeps moving: new crimes, new letters.</li>" +
+              "<li><b>Make one arrest.</b> Anyone on your suspect list, any time. It goes all the way to sentencing. No take-backs.</li>" +
+              "<li><b>Fewer steps and days</b> means a higher rank. Arrest the wrong person and you'll find out at the end.</li>" +
+            "</ol>" +
+            '<p class="cw">A real case with real victims. Files are reconstructed from public reporting and kept non-graphic.</p>' +
+            '<button class="btn primary big" id="begin" type="button">Begin the investigation</button>' +
+          "</div>" +
+          '<button class="folder-cover" id="cover" type="button" aria-label="Open the case file">' +
+            '<span class="tab-label">' + esc(C.place) + "</span>" +
+            '<span class="cover-no">Case No. ' + pad3(caseNo) + "</span>" +
+            '<span class="cover-title">' + esc(C.title) + "</span>" +
+            '<span class="cover-stamp">Unsolved</span>' +
+            '<dl class="cover-sheet"><div><dt>Victims</dt><dd>' + C.victims.length + '</dd></div><div><dt>Years open</dt><dd>' + C.yearsOpen + '</dd></div><div><dt>Chapters</dt><dd>' + C.chapters.length + '</dd></div><div><dt>Arrests allowed</dt><dd>1</dd></div></dl>' +
+            '<span class="cover-hint">Tap to open</span>' +
+          "</button>" +
+        "</div>" +
+      "</section>" + statsBar();
+    var folder = document.getElementById("folder");
+    document.getElementById("cover").onclick = function () { folder.classList.add("open"); setTimeout(function () { document.getElementById("begin").focus({ preventScroll: true }); }, 700); };
+    document.getElementById("begin").onclick = function () {
+      S.screen = "play"; S.clock = C.chapters[0].start;
+      var fired = fireDue(); persist();
+      showChapterCard(null, fired);
     };
   }
 
-  function renderStage() {
-    var i = state.stage;
-    var st = theCase.stages[i];
-    var result = state.results[i];
-    var guesses = state.guesses[i] || [];
-    var misses = guesses.length - (result && result.solved ? 1 : 0);
-    var hintHtml = "";
-    for (var h = 0; h < Math.min(misses, st.hints.length); h++) {
-      hintHtml += '<p class="hint"><span>Hint ' + (h + 1) + "</span>" + esc(st.hints[h]) + "</p>";
-    }
-    var wrong = guesses.filter(function (g, idx) { return !(result && result.solved && idx === guesses.length - 1); });
-    var wrongHtml = wrong.length
-      ? '<ul class="misses">' + wrong.map(function (g) { return "<li>" + esc(g) + "</li>"; }).join("") + "</ul>"
+  function renderPlay(highlight) {
+    highlight = highlight || {};
+    var ch = chapter();
+    var files = S.files.slice().sort(function (a, b) { return parse(C.files[b].date) - parse(C.files[a].date); });
+    var acts = availableActions();
+    var unread = S.files.filter(function (f) { return !has(S.seen, f); }).length;
+    var tab = S.tab;
+
+    var evidence = files.length
+      ? '<div class="board">' + files.map(function (id) { return fileCard(id, has(highlight.files || [], id)); }).join("") + "</div>"
+      : '<p class="empty">No files yet.</p>';
+
+    var leads = acts.length
+      ? '<ul class="leads">' + acts.map(function (a) {
+          return '<li><button class="lead" data-act="' + a.id + '" type="button"><span class="lead-label">' + esc(a.label) + '</span><span class="cost">+' + a.days + (a.days === 1 ? " day" : " days") + "</span></button></li>";
+        }).join("") + "</ul>"
+      : '<p class="empty">No open leads right now. Let time pass, or make an arrest.</p>';
+    var doneHTML = S.done.length
+      ? '<details class="done"><summary>Leads followed (' + S.done.length + ")</summary><ul>" + S.done.map(function (id) {
+          var a = C.actions.filter(function (x) { return x.id === id; })[0]; return "<li>" + esc(a.label) + "</li>";
+        }).join("") + "</ul></details>"
       : "";
 
-    var body;
-    if (result) {
-      body =
-        '<div class="closed ' + tagClass(result) + '">' +
-          '<p class="verdict">' + (result.solved ? "Logged" : "Missed") + ' <span class="pts">+' + result.points + "</span></p>" +
-          '<p class="reveal">' + esc(st.reveal) + "</p>" +
-        "</div>" +
-        wrongHtml +
-        '<button class="btn primary" id="next" type="button">' +
-          (i + 1 < theCase.stages.length ? "Next exhibit" : "Close the case") +
-        "</button>";
-    } else {
-      var triesLeft = MAX_TRIES - guesses.length;
-      body =
-        hintHtml + wrongHtml +
-        '<form class="answer" id="answer" autocomplete="off">' +
-          '<label for="guess" class="q">' + esc(st.question) + "</label>" +
-          '<div class="field">' +
-            '<input id="guess" name="guess" type="text" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="go" placeholder="Type your answer" required>' +
-            '<button class="btn primary" type="submit">Submit</button>' +
-          "</div>" +
-          '<p class="tries">Worth <b>' + STAGE_POINTS[guesses.length] + "</b> · " + triesLeft + (triesLeft === 1 ? " try" : " tries") + " left</p>" +
-        "</form>";
-    }
+    var sus = S.suspects.length
+      ? '<div class="suspects">' + S.suspects.map(function (id) {
+          var p = C.suspects[id];
+          return '<article class="suspect' + (has(highlight.suspects || [], id) ? " is-new" : "") + '">' + mug(id) +
+            '<div class="sus-body"><h3>' + esc(p.name) + "</h3><p>" + esc(p.note) + "</p>" +
+            '<button class="btn danger" data-accuse="' + id + '" type="button">Arrest and charge</button></div></article>';
+        }).join("") + "</div>"
+      : '<p class="empty">No suspects yet. Keep working the case.</p>';
 
     app.innerHTML =
-      header() + tags() +
-      '<section class="sheet stage">' +
-        '<div class="exhibit-head">' +
-          '<span class="exhibit">Exhibit ' + (i + 1) + " of " + theCase.stages.length + "</span>" +
-          '<span class="when">' + esc(st.date) + "</span>" +
-        "</div>" +
-        '<p class="briefing">' + esc(st.briefing) + "</p>" +
-        body +
-      "</section>" +
-      '<p class="running">Running score <b>' + total() + "</b> / " + maxScore() + "</p>";
+      hud() +
+      '<div class="chapter-bar"><span>Chapter ' + ch.n + " of " + C.chapters.length + '</span><b>' + esc(ch.title) + "</b></div>" +
+      '<nav class="tabs" role="tablist">' +
+        tabBtn("evidence", "Evidence", unread) + tabBtn("leads", "Leads", acts.length) + tabBtn("suspects", "Suspects", S.suspects.length) +
+      "</nav>" +
+      '<section class="panel" id="panel">' +
+        (tab === "evidence" ? evidence : tab === "leads" ? leads + doneHTML : sus) +
+      "</section>";
 
-    if (result) {
-      var next = document.getElementById("next");
-      next.focus({ preventScroll: true });
-      next.onclick = function () {
-        if (i + 1 < theCase.stages.length) { state.stage = i + 1; }
-        else { state.screen = "result"; recordStats(); }
-        persist(); render(); window.scrollTo(0, 0);
-      };
-    } else {
-      var input = document.getElementById("guess");
-      if (window.matchMedia("(hover: hover)").matches) input.focus();
-      document.getElementById("answer").onsubmit = function (e) {
-        e.preventDefault();
-        var g = input.value.trim();
-        if (!g) return;
-        var list = state.guesses[i] || (state.guesses[i] = []);
-        var tryIdx = list.length;
-        list.push(g);
-        if (isMatch(g, st.answers)) {
-          state.results[i] = { points: STAGE_POINTS[tryIdx], solved: true };
-        } else if (list.length >= MAX_TRIES) {
-          state.results[i] = { points: 0, solved: false };
-        } else {
-          persist(); render();
-          var sheet = document.querySelector(".sheet");
-          sheet.classList.add("shake");
-          return;
-        }
-        persist(); render();
-      };
+    bindPlay();
+    if (highlight.clockFrom && highlight.clockFrom !== S.clock) animateClock(highlight.clockFrom);
+    if (highlight.meters) bumpMeters(highlight.meters);
+  }
+  function tabBtn(id, label, n) {
+    return '<button role="tab" type="button" class="tab' + (S.tab === id ? " on" : "") + '" data-tab="' + id + '" aria-selected="' + (S.tab === id) + '">' +
+      label + (n ? ' <span class="badge">' + n + "</span>" : "") + "</button>";
+  }
+  function bindPlay() {
+    var pass = document.getElementById("pass");
+    if (pass) pass.onclick = passTime;
+    [].forEach.call(document.querySelectorAll("[data-tab]"), function (b) {
+      b.onclick = function () { S.tab = b.getAttribute("data-tab"); persist(); renderPlay(); };
+    });
+    [].forEach.call(document.querySelectorAll("[data-file]"), function (b) {
+      b.onclick = function () { openDoc(b.getAttribute("data-file")); };
+    });
+    [].forEach.call(document.querySelectorAll("[data-act]"), function (b) {
+      b.onclick = function () { b.disabled = true; b.classList.add("working"); setTimeout(function () { doAction(b.getAttribute("data-act")); }, reduceMotion ? 0 : 380); };
+    });
+    [].forEach.call(document.querySelectorAll("[data-accuse]"), function (b) {
+      b.onclick = function () { confirmAccuse(b.getAttribute("data-accuse")); };
+    });
+  }
+
+  function afterChange(clockFrom, fired, newFiles, newSus) {
+    var allNew = newFiles.slice(); var allSus = newSus.slice();
+    fired.forEach(function (ev) { add(allNew, ev.files); add(allSus, ev.suspects); });
+    if (newFiles.length && !fired.length) S.tab = "evidence";
+    persist();
+    renderPlay({ files: allNew, suspects: allSus, clockFrom: clockFrom, meters: true });
+    if (fired.length) showNews(fired.slice(), allNew, function () {});
+    else if (newFiles.length) toast(newFiles.length === 1 ? "New file: " + C.files[newFiles[0]].title : newFiles.length + " new files on the board");
+  }
+
+  /* ================= animations ================= */
+  function animateClock(from) {
+    var flaps = document.querySelectorAll(".clock .flap");
+    var d0 = new Date(parse(from));
+    var old = [MONTHS[d0.getUTCMonth()].toUpperCase(), pad(d0.getUTCDate()), String(d0.getUTCFullYear())];
+    [].forEach.call(flaps, function (el, i) {
+      if (old[i] !== el.getAttribute("data-v") && !reduceMotion) {
+        var v = el.getAttribute("data-v");
+        el.textContent = old[i];
+        el.classList.remove("flip"); void el.offsetWidth; el.classList.add("flip");
+        setTimeout(function () { el.textContent = v; }, 200);
+      }
+    });
+  }
+  function bumpMeters() {
+    [].forEach.call(document.querySelectorAll(".meter b"), function (el) {
+      el.classList.remove("bump"); void el.offsetWidth; el.classList.add("bump");
+    });
+  }
+  var toastTimer;
+  function toast(msg) {
+    var t = document.getElementById("toast");
+    t.textContent = msg; t.classList.add("show");
+    clearTimeout(toastTimer); toastTimer = setTimeout(function () { t.classList.remove("show"); }, 2600);
+  }
+
+  /* ================= overlays ================= */
+  function openOverlay(html, cls) {
+    overlay.className = "overlay" + (cls ? " ov-" + cls : "");
+    overlay.innerHTML = '<div class="ov-inner">' + html + "</div>";
+    overlay.hidden = false;
+    document.body.classList.add("locked");
+    var f = overlay.querySelector("[data-focus]") || overlay.querySelector("button");
+    if (f) f.focus({ preventScroll: true });
+  }
+  function closeOverlay() {
+    overlay.hidden = true; overlay.innerHTML = ""; document.body.classList.remove("locked");
+  }
+  overlay.addEventListener("click", function (e) { if (e.target === overlay || e.target.classList.contains("ov-inner")) { if (overlay.dataset.dismiss !== "no") closeOverlay(); } });
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape" && !overlay.hidden && overlay.dataset.dismiss !== "no") closeOverlay(); });
+
+  function showNews(queue, newFiles, done) {
+    if (!queue.length) { closeOverlay(); renderPlay({ files: newFiles }); return; }
+    var ev = queue.shift();
+    overlay.dataset.dismiss = "no";
+    openOverlay(
+      '<article class="paper-spin">' +
+        '<div class="np-mast"><span>Wichita Evening Report</span><span>' + fmt(eventDate(ev)) + "</span></div>" +
+        '<div class="np-extra">Extra</div>' +
+        '<h2 class="np-head">' + esc(ev.headline) + "</h2>" +
+        '<div class="np-cols"><span></span><span></span><span></span></div>' +
+        '<div class="np-actions">' +
+          '<button class="btn primary" id="np-read" type="button" data-focus>Read the file</button>' +
+          '<button class="btn ghost" id="np-next" type="button">' + (queue.length ? "Next headline" : "Back to the board") + "</button>" +
+        "</div>" +
+      "</article>", "news");
+    document.getElementById("np-read").onclick = function () {
+      overlay.dataset.dismiss = "";
+      var fid = (ev.files || [])[0];
+      S.tab = "evidence"; persist();
+      openDoc(fid, function () { if (queue.length) showNews(queue, newFiles, done); else { closeOverlay(); renderPlay({ files: newFiles }); } });
+    };
+    document.getElementById("np-next").onclick = function () { overlay.dataset.dismiss = ""; showNews(queue, newFiles, done); };
+  }
+
+  function showChapterCard(clockFrom, fired) {
+    var ch = chapter();
+    overlay.dataset.dismiss = "no";
+    openOverlay(
+      '<div class="chapter-card">' +
+        '<p class="cc-n">Chapter ' + ch.n + "</p>" +
+        '<h2 class="cc-title">' + esc(ch.title) + "</h2>" +
+        '<p class="cc-date">' + fmt(S.clock) + "</p>" +
+        '<p class="cc-intro">' + esc(ch.intro) + "</p>" +
+        '<button class="btn primary" id="cc-go" type="button" data-focus>Continue</button>' +
+      "</div>", "chapter");
+    document.getElementById("cc-go").onclick = function () {
+      overlay.dataset.dismiss = "";
+      S.tab = "evidence"; persist();
+      var nf = []; fired.forEach(function (ev) { add(nf, ev.files); });
+      renderPlay({ files: nf, clockFrom: clockFrom });
+      if (fired.length) showNews(fired.slice(), nf, function () {});
+      else closeOverlay();
+    };
+  }
+
+  /* ================= documents ================= */
+  function openDoc(id, onClose) {
+    var f = C.files[id];
+    if (!f) return;
+    var firstRead = !has(S.seen, id);
+    add(S.seen, [id]); persist();
+    overlay.dataset.dismiss = "";
+    openOverlay(
+      '<div class="doc-wrap">' + docHTML(id, f) +
+        '<div class="doc-foot"><span>Reconstructed from public reporting</span>' +
+        '<button class="btn primary" id="doc-close" type="button" data-focus>Back to the board</button></div>' +
+      "</div>", "doc");
+    var close = function () { if (onClose) onClose(); else { closeOverlay(); renderPlay(); } };
+    document.getElementById("doc-close").onclick = close;
+    overlay.onclick = null;
+    if (firstRead && !reduceMotion) typeIn(overlay.querySelector(".doc-body"));
+    if (f.type === "video") startNoise();
+  }
+
+  function fieldsHTML(f) {
+    if (!f.fields) return "";
+    return '<dl class="fields">' + f.fields.map(function (r) { return "<div><dt>" + esc(r[0]) + "</dt><dd>" + esc(r[1]) + "</dd></div>"; }).join("") + "</dl>";
+  }
+  function bodyHTML(f) {
+    return '<div class="doc-body">' + f.body.map(function (p) { return "<p>" + esc(p) + "</p>"; }).join("") + "</div>";
+  }
+  function docHTML(id, f) {
+    var t = f.type;
+    if (t === "clipping") {
+      return '<article class="doc doc-clipping"><div class="clip-mast">' + esc(f.from) + " · " + fmt(f.date) + "</div>" +
+        "<h2>" + esc(f.title) + "</h2>" + bodyHTML(f) + "</article>";
     }
+    if (t === "letter" || t === "note") {
+      return '<article class="doc doc-' + t + '"><div class="ev-stamp">Evidence copy</div>' +
+        '<div class="doc-meta">' + esc(f.from) + " · Received " + fmt(f.date) + "</div><h2>" + esc(f.title) + "</h2>" + fieldsHTML(f) + bodyHTML(f) + "</article>";
+    }
+    if (t === "phone") {
+      var wave = "";
+      if (id === "fox_call") {
+        wave = '<div class="wave" aria-hidden="true">' + Array.apply(null, Array(36)).map(function (_, i) {
+          return '<i style="--h:' + (20 + (hash(id + i) % 70)) + "%;--d:" + (i * 0.04).toFixed(2) + 's"></i>';
+        }).join("") + '</div><p class="wave-cap">Recording on file · 0:14</p>';
+      }
+      return '<article class="doc doc-phone"><div class="form-head"><span>' + esc(f.from) + "</span><span>" + fmt(f.date) + "</span></div><h2>" + esc(f.title) + "</h2>" + wave + fieldsHTML(f) + bodyHTML(f) + "</article>";
+    }
+    if (t === "video") {
+      return '<article class="doc doc-video"><div class="crt"><canvas id="noise" width="160" height="90"></canvas>' +
+        '<svg class="jeep" viewBox="0 0 200 90" aria-hidden="true"><rect x="0" y="70" width="200" height="20" class="lot"/>' +
+        '<path d="M48 64 L54 36 Q56 30 64 30 L132 30 Q140 30 144 38 L152 50 L160 52 Q166 54 166 60 L166 66 L40 66 Q40 64 48 64Z" class="body"/>' +
+        '<rect x="62" y="35" width="28" height="13" class="glass"/><rect x="96" y="35" width="34" height="13" class="glass"/>' +
+        '<circle cx="70" cy="68" r="10" class="wheel"/><circle cx="144" cy="68" r="10" class="wheel"/>' +
+        '<rect x="10" y="40" width="30" height="26" class="truck"/></svg>' +
+        '<span class="rec">● REC</span><span class="ts">CAM 3 · 01/2005</span></div>' +
+        '<div class="doc-meta">' + esc(f.from) + "</div><h2>" + esc(f.title) + "</h2>" + bodyHTML(f) + "</article>";
+    }
+    if (t === "disk") {
+      return '<article class="doc doc-disk"><div class="disk-row">' +
+        '<svg class="floppy" viewBox="0 0 100 100" aria-hidden="true"><rect x="6" y="6" width="88" height="88" rx="4" class="fl-body"/>' +
+        '<rect x="28" y="6" width="44" height="28" class="fl-shutter"/><rect x="54" y="10" width="10" height="20" class="fl-hole"/>' +
+        '<rect x="18" y="50" width="64" height="40" rx="2" class="fl-label"/><line x1="24" x2="76" y1="62" y2="62" class="fl-line"/><line x1="24" x2="70" y1="72" y2="72" class="fl-line"/></svg>' +
+        '<div class="win"><div class="win-bar"><span>Properties</span><span class="x">×</span></div>' + fieldsHTML(f) + "</div></div>" +
+        '<div class="doc-meta">' + esc(f.from) + " · " + fmt(f.date) + "</div><h2>" + esc(f.title) + "</h2>" + bodyHTML(f) + "</article>";
+    }
+    if (t === "web") {
+      return '<article class="doc doc-web"><div class="browser"><div class="br-bar"><i></i><i></i><i></i><span class="url">' + esc(f.from) + "</span></div>" +
+        '<div class="br-page"><h2>' + esc(f.title) + "</h2>" + fieldsHTML(f) + bodyHTML(f) + "</div></div></article>";
+    }
+    // report, statement, lab, memo
+    return '<article class="doc doc-report doc-' + t + '"><div class="letterhead"><span class="seal" aria-hidden="true">★</span><div><b>' + esc(f.from) + "</b><span>" + typeLabel(t) + " · " + fmt(f.date) + "</span></div></div>" +
+      "<h2>" + esc(f.title) + "</h2>" + fieldsHTML(f) + bodyHTML(f) +
+      (t === "lab" ? '<div class="barcode" aria-hidden="true"></div>' : "") + "</article>";
+  }
+
+  function typeIn(el) {
+    if (!el) return;
+    var ps = [].slice.call(el.querySelectorAll("p"));
+    var texts = ps.map(function (p) { return p.textContent; });
+    ps.forEach(function (p) { p.textContent = ""; p.classList.add("typing"); });
+    var pi = 0, ci = 0, stop = false;
+    function skip() { stop = true; ps.forEach(function (p, i) { p.textContent = texts[i]; p.classList.remove("typing"); }); }
+    el.addEventListener("click", skip, { once: true });
+    (function step() {
+      if (stop || pi >= ps.length) { ps.forEach(function (p) { p.classList.remove("typing"); }); return; }
+      ci += 3;
+      ps[pi].textContent = texts[pi].slice(0, ci);
+      if (ci >= texts[pi].length) { ps[pi].classList.remove("typing"); pi++; ci = 0; }
+      setTimeout(step, 12);
+    })();
+  }
+  function startNoise() {
+    var cv = document.getElementById("noise");
+    if (!cv) return;
+    var ctx = cv.getContext("2d"), img = ctx.createImageData(160, 90);
+    (function frame() {
+      if (!document.getElementById("noise")) return;
+      for (var i = 0; i < img.data.length; i += 4) { var v = Math.random() * 255 | 0; img.data[i] = img.data[i + 1] = img.data[i + 2] = v; img.data[i + 3] = 60; }
+      ctx.putImageData(img, 0, 0);
+      if (!reduceMotion) setTimeout(function () { requestAnimationFrame(frame); }, 60);
+    })();
+  }
+
+  /* ================= accusation ================= */
+  function confirmAccuse(id) {
+    var p = C.suspects[id];
+    overlay.dataset.dismiss = "";
+    openOverlay(
+      '<div class="confirm">' + mug(id) +
+        '<h2>Arrest ' + esc(p.name) + "?</h2>" +
+        "<p>This ends your investigation on " + fmt(S.clock) + ". The case goes to court and plays out to sentencing. You can't take it back.</p>" +
+        '<div class="confirm-actions"><button class="btn danger big" id="yes" type="button">Make the arrest</button>' +
+        '<button class="btn ghost" id="no" type="button" data-focus>Keep investigating</button></div>' +
+      "</div>", "confirm-ov");
+    document.getElementById("no").onclick = closeOverlay;
+    document.getElementById("yes").onclick = function () {
+      S.accused = id; S.accuseDate = S.clock; S.screen = "trial"; persist();
+      closeOverlay(); recordStats(); renderTrial(true);
+    };
+  }
+
+  function outcomeSteps() {
+    var right = S.accused === C.culprit;
+    var name = C.suspects[S.accused].name;
+    var list = right ? C.culpritOutcome : C.wrongOutcome;
+    return list.map(function (s) {
+      var text = s.text.replace(/\{name\}/g, name);
+      if (right && s.title === "Interrogation" && !S.hasDna) text = "His DNA is tested after the arrest and matches the crime scenes. He confesses.";
+      return { date: addDays(S.accuseDate, s.offset), title: s.title, text: text };
+    });
+  }
+
+  function renderTrial(animate) {
+    var steps = outcomeSteps();
+    var p = C.suspects[S.accused];
+    app.innerHTML =
+      '<section class="trial">' +
+        '<div class="trial-head">' + mug(S.accused) + '<div><p class="eyebrow">The State of Kansas v.</p><h1>' + esc(p.name) + "</h1></div></div>" +
+        '<ol class="docket">' + steps.map(function (s, i) {
+          return '<li style="--i:' + i + '"><span class="dk-date">' + fmt(s.date) + '</span><b>' + esc(s.title) + "</b><p>" + esc(s.text) + "</p></li>";
+        }).join("") + "</ol>" +
+        '<button class="btn primary big" id="truth" type="button">See what really happened</button>' +
+      "</section>";
+    var docket = app.querySelector(".docket");
+    var btn = document.getElementById("truth");
+    if (animate && !reduceMotion) {
+      docket.classList.add("play");
+      btn.classList.add("wait");
+      setTimeout(function () { btn.classList.remove("wait"); btn.focus({ preventScroll: true }); }, steps.length * 900 + 400);
+    }
+    btn.onclick = function () { S.screen = "end"; persist(); renderEnd(true); window.scrollTo(0, 0); };
   }
 
   function recordStats() {
@@ -234,107 +561,121 @@
     var y = new Date(now); y.setDate(y.getDate() - 1);
     stats.streak = stats.lastDay === localKey(y) ? stats.streak + 1 : 1;
     stats.played += 1;
-    stats.best = Math.max(stats.best, total());
+    if (S.accused === C.culprit) stats.solved += 1;
+    stats.best = Math.max(stats.best, score());
     stats.lastDay = todayKey;
-    save("coldread:stats", stats);
+    save("coldread:stats2", stats);
   }
 
   function shareText() {
-    var grid = state.results.map(function (r) {
-      return r.points === STAGE_POINTS[0] ? "🟩" : r.points === STAGE_POINTS[1] ? "🟨" : r.points > 0 ? "🟧" : "⬛";
-    }).join("");
-    return "Cold Read #" + caseNo + " — " + rankFor(total()).title + "\n" + grid + " " + total() + "/" + maxScore();
+    var right = S.accused === C.culprit;
+    var sc = score();
+    return "Cold Read #" + caseNo + " 🗂️\n" +
+      (right ? "✅ Right suspect · " + rank(sc).title + " (" + sc + ")" : "❌ Arrested the wrong person") + "\n" +
+      "👣 " + S.steps + " steps · ⏱️ " + S.days + " days worked\n" +
+      "📅 Arrest: " + MONTHS[new Date(parse(S.accuseDate)).getUTCMonth()] + " " + new Date(parse(S.accuseDate)).getUTCFullYear();
   }
 
-  function renderResult() {
-    var score = total();
-    var rank = rankFor(score);
-    var rows = theCase.stages.map(function (st, i) {
-      var r = state.results[i] || { points: 0 };
-      return '<li class="' + tagClass(r) + '"><span class="n">' + (i + 1) + '</span><span class="d">' + esc(st.date) +
-        '</span><span class="p">' + r.points + "</span></li>";
-    }).join("");
+  function renderEnd(animate) {
+    var right = S.accused === C.culprit;
+    var sc = score(); var rk = rank(sc);
+    var p = C.suspects[S.accused];
+    var realDiff = diffDays(S.accuseDate, C.realArrest);
+    var later = C.victims.filter(function (v) { return parse(v.date) > parse(S.accuseDate); });
+    var compare = right
+      ? (realDiff > 0 ? "You arrested him " + realDiff + (realDiff === 1 ? " day" : " days") + " before the real task force did."
+        : realDiff === 0 ? "Same day as the real arrest." : "The real task force got there " + (-realDiff) + (realDiff === -1 ? " day" : " days") + " before you.")
+      : "";
 
     app.innerHTML =
-      header() + tags() +
-      '<section class="sheet result">' +
-        '<div class="stamp" aria-hidden="true">Case Closed</div>' +
+      '<section class="end' + (right ? " right" : " wrong") + (animate && !reduceMotion ? " anim" : "") + '">' +
+        '<div class="verdict-stamp">' + (right ? "Case closed" : "Wrong person") + "</div>" +
         '<p class="eyebrow">Detective rating</p>' +
-        '<h1 class="rank">' + esc(rank.title) + "</h1>" +
-        '<p class="score"><span>' + score + "</span> / " + maxScore() + "</p>" +
-        '<p class="rank-note">' + esc(rank.note) + "</p>" +
-        '<ol class="ledger">' + rows + "</ol>" +
-        '<div class="share">' +
-          '<pre id="share-text">' + esc(shareText()) + "</pre>" +
-          '<button class="btn primary" id="copy" type="button">Copy result</button>' +
-          '<span class="copied" id="copied" role="status"></span>' +
-        "</div>" +
+        '<h1 class="rank">' + esc(rk.title) + "</h1>" +
+        '<p class="score"><b>' + sc + "</b> / 1000</p>" +
+        '<dl class="end-stats">' +
+          "<div><dt>Steps</dt><dd>" + S.steps + "</dd></div>" +
+          "<div><dt>Days worked</dt><dd>" + S.days + "</dd></div>" +
+          "<div><dt>Arrest</dt><dd>" + fmt(S.accuseDate) + "</dd></div>" +
+          "<div><dt>Case open</dt><dd>" + span(C.caseStart, S.accuseDate) + "</dd></div>" +
+        "</dl>" +
+        (compare ? '<p class="compare">' + esc(compare) + "</p>" : "") +
+        (!right ? '<div class="wrong-box"><p><b>' + esc(p.name) + " was innocent.</b> " + esc(p.innocent || "") + "</p>" +
+          (later.length ? '<p class="toll">After your arrest, the real killer took ' + later.length + (later.length === 1 ? " more life." : " more lives.") + "</p>" : "") + "</div>" : "") +
+        '<div class="truth"><h2>' + (right ? "You got him" : "Who it really was") + "</h2>" +
+          C.truth.map(function (t) { return "<p>" + esc(t) + "</p>"; }).join("") +
+          '<p class="missed"><b>The clue nobody caught:</b> ' + esc(C.missed) + "</p></div>" +
+        '<div class="share"><pre id="share-text">' + esc(shareText()) + "</pre>" +
+          '<button class="btn primary" id="copy" type="button">Copy result</button><span class="copied" id="copied" role="status"></span></div>' +
         '<p class="next-case">Next case in <b id="countdown">--:--:--</b></p>' +
-      "</section>" +
-      statsBar() +
-      '<section class="sheet aftermath">' +
-        "<h2>What happened next</h2>" +
-        '<ul class="epilogue">' + theCase.epilogue.map(function (e) { return "<li>" + esc(e) + "</li>"; }).join("") + "</ul>" +
+      "</section>" + statsBar() +
+      '<section class="aftermath">' +
         "<h2>In memory</h2>" +
-        '<ul class="memorial">' + theCase.victims.map(function (v) {
-          return '<li><span>' + esc(v.name) + '</span><span class="yr">' + v.year + "</span></li>";
-        }).join("") + "</ul>" +
+        '<ul class="memorial">' + C.victims.map(function (v) { return "<li><span>" + esc(v.name) + '</span><span class="yr">' + new Date(parse(v.date)).getUTCFullYear() + "</span></li>"; }).join("") + "</ul>" +
         "<h2>Sources</h2>" +
-        '<ul class="sources">' + theCase.sources.map(function (s) {
-          return '<li><a href="' + esc(s.url) + '" target="_blank" rel="noopener">' + esc(s.title) + "</a></li>";
-        }).join("") + "</ul>" +
+        '<ul class="sources">' + C.sources.map(function (s) { return '<li><a href="' + esc(s.url) + '" target="_blank" rel="noopener">' + esc(s.title) + "</a></li>"; }).join("") + "</ul>" +
+        '<p class="disclose">Names of people who were investigated and cleared have been changed. Tip-line suspects are composites. The trial of a wrongly accused suspect is fictional.</p>' +
       "</section>";
 
     document.getElementById("copy").onclick = function () {
       var text = shareText();
-      var done = function (msg) { document.getElementById("copied").textContent = msg; };
-      try {
-        navigator.clipboard.writeText(text).then(function () { done("Copied"); }, function () { selectShare(); done("Select and copy the text above"); });
-      } catch (e) { selectShare(); done("Select and copy the text above"); }
+      var msg = function (m) { document.getElementById("copied").textContent = m; };
+      try { navigator.clipboard.writeText(text).then(function () { msg("Copied"); }, function () { selectShare(); msg("Select the text above to copy"); }); }
+      catch (e) { selectShare(); msg("Select the text above to copy"); }
     };
     tick();
   }
-
   function selectShare() {
-    var el = document.getElementById("share-text");
-    var range = document.createRange(); range.selectNodeContents(el);
-    var sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range);
+    var el = document.getElementById("share-text"), r = document.createRange();
+    r.selectNodeContents(el); var s = window.getSelection(); s.removeAllRanges(); s.addRange(r);
   }
-
   function statsBar() {
     if (!stats.played) return "";
-    return '<dl class="stats">' +
-      "<div><dt>Cases</dt><dd>" + stats.played + "</dd></div>" +
-      "<div><dt>Streak</dt><dd>" + stats.streak + "</dd></div>" +
-      "<div><dt>Best</dt><dd>" + stats.best + "</dd></div>" +
-    "</dl>";
+    return '<dl class="stats"><div><dt>Cases</dt><dd>' + stats.played + "</dd></div><div><dt>Solved</dt><dd>" + stats.solved +
+      "</dd></div><div><dt>Streak</dt><dd>" + stats.streak + "</dd></div><div><dt>Best</dt><dd>" + stats.best + "</dd></div></dl>";
   }
-
   var timer;
   function tick() {
     clearInterval(timer);
-    var el = document.getElementById("countdown");
-    if (!el) return;
+    var el = document.getElementById("countdown"); if (!el) return;
     function upd() {
-      var n = new Date();
-      var mid = new Date(n.getFullYear(), n.getMonth(), n.getDate() + 1);
+      var n = new Date(), mid = new Date(n.getFullYear(), n.getMonth(), n.getDate() + 1);
       var s = Math.max(0, Math.floor((mid - n) / 1000));
       if (s === 0) { location.reload(); return; }
-      var hh = String(Math.floor(s / 3600)).padStart(2, "0");
-      var mm = String(Math.floor(s % 3600 / 60)).padStart(2, "0");
-      var ss = String(s % 60).padStart(2, "0");
-      el.textContent = hh + ":" + mm + ":" + ss;
+      el.textContent = pad(Math.floor(s / 3600)) + ":" + pad(Math.floor(s % 3600 / 60)) + ":" + pad(s % 60);
     }
     upd(); timer = setInterval(upd, 1000);
   }
 
+  /* ================= dust motes ================= */
+  (function dust() {
+    var cv = document.getElementById("dust"); if (!cv || reduceMotion) return;
+    var ctx = cv.getContext("2d"), motes = [], w, h;
+    function size() { w = cv.width = window.innerWidth; h = cv.height = window.innerHeight; }
+    size(); window.addEventListener("resize", size);
+    for (var i = 0; i < 40; i++) motes.push({ x: Math.random(), y: Math.random(), r: Math.random() * 1.6 + 0.4, v: Math.random() * 0.00025 + 0.00008, o: Math.random() * 0.5 + 0.2 });
+    (function f() {
+      ctx.clearRect(0, 0, w, h);
+      motes.forEach(function (m) {
+        m.y -= m.v; m.x += Math.sin(m.y * 20) * 0.0002;
+        if (m.y < -0.02) { m.y = 1.02; m.x = Math.random(); }
+        var dx = m.x - 0.5, glow = Math.max(0, 1 - Math.abs(dx) * 1.6);
+        ctx.fillStyle = "rgba(255,226,170," + (m.o * glow) + ")";
+        ctx.beginPath(); ctx.arc(m.x * w, m.y * h, m.r, 0, 6.283); ctx.fill();
+      });
+      requestAnimationFrame(f);
+    })();
+  })();
+
+  /* ================= boot ================= */
   function render() {
-    if (!theCase) { app.innerHTML = "<p>No cases loaded.</p>"; return; }
-    if (state.screen === "stage") renderStage();
-    else if (state.screen === "result") renderResult();
+    var t = document.getElementById("toast"); if (t) t.classList.remove("show");
+    if (!C) { app.innerHTML = "<p>No cases loaded.</p>"; return; }
+    if (S.screen === "play") renderPlay();
+    else if (S.screen === "trial") renderTrial(false);
+    else if (S.screen === "end") renderEnd(false);
     else renderIntro();
   }
-
-  window.__coldRead = { isMatch: isMatch, rankFor: rankFor };
+  window.__coldRead = { state: function () { return S; }, doAction: doAction, passTime: passTime, score: score, rank: rank };
   render();
 })();
